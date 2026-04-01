@@ -138,7 +138,8 @@ def export_object(deg_instance, export_ctx, is_particle):
                         if export_ctx.exported_mats.has_mat(mat_id):
                             mixed_mat = export_ctx.exported_mats.mats[mat_id]
                             params['bsdf'] = {'type': 'ref', 'id': mixed_mat['bsdf']}
-                            params['emitter'] = mixed_mat['emitter']
+                            if 'emitter' in mixed_mat:
+                                params['emitter'] = mixed_mat['emitter']
                         else:
                             params['bsdf'] = {'type': 'ref', 'id': mat_id}
 
