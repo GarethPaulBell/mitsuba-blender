@@ -10,7 +10,11 @@ def is_simple_plane(b_mesh):
     Check if the mesh is a single quad (4 vertices, 1 face).
     This is the standard 'Plane' primitive in Blender.
     """
-    return len(b_mesh.vertices) == 4 and len(b_mesh.polygons) == 1
+    return (
+        len(b_mesh.vertices) == 4 and
+        len(b_mesh.polygons) == 1 and
+        b_mesh.polygons[0].loop_total == 4
+    )
 
 
 def convert_mesh(export_ctx, b_mesh, matrix_world, name, mat_nr):
