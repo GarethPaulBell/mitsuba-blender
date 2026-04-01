@@ -5,6 +5,14 @@ from .materials import export_material
 from .export_context import Files
 
 
+def is_simple_plane(b_mesh):
+    """
+    Check if the mesh is a single quad (4 vertices, 1 face).
+    This is the standard 'Plane' primitive in Blender.
+    """
+    return len(b_mesh.vertices) == 4 and len(b_mesh.polygons) == 1
+
+
 def convert_mesh(export_ctx, b_mesh, matrix_world, name, mat_nr):
     '''
     This method creates a mitsuba mesh from a blender mesh and returns it.
@@ -114,6 +122,28 @@ def export_object(deg_instance, export_ctx, is_particle):
     if export_ctx.data_get(object_id) is None:
         if b_object.type == 'MESH':
             b_mesh = b_object.data
+
+            if is_simple_plane(b_mesh):
+                export_ctx.log(f"Exporting '{b_object.name}' as native Mitsuba rectangle.", 'INFO')
+                params = {
+                    'type': 'rectangle',
+                    'to_world': export_ctx.transform_matrix(b_object.matrix_world)
+                }
+
+                if b_mesh.materials:
+                    mat = b_mesh.materials[0]
+                    if mat:
+                        export_material(export_ctx, mat)
+                        mat_id = f"mat-{mat.name}"
+                        if export_ctx.exported_mats.has_mat(mat_id):
+                            mixed_mat = export_ctx.exported_mats.mats[mat_id]
+                            params['bsdf'] = {'type': 'ref', 'id': mixed_mat['bsdf']}
+                            params['emitter'] = mixed_mat['emitter']
+                        else:
+                            params['bsdf'] = {'type': 'ref', 'id': mat_id}
+
+                export_ctx.data_add(params, name=object_id)
+                return
         else: # Metaballs, text, surfaces
             b_mesh = b_object.to_mesh()
 
