@@ -128,11 +128,9 @@ def export_object(deg_instance, export_ctx, is_particle):
     if b_object.type == 'MESH':
         source_mesh = get_source_mesh(b_object)
         if source_mesh is not None:
-            export_name = bpy.path.clean_name(source_mesh.name)
             is_shared_mesh = export_ctx.mesh_use_count.get(source_mesh.as_pointer(), 0) > 1
-
-    if not is_shared_mesh:
-        export_name = name_clean
+            if is_shared_mesh:
+                export_name = bpy.path.clean_name(source_mesh.name)
 
     object_id = f"mesh-{export_name}"
 

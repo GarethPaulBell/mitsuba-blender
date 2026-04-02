@@ -45,7 +45,7 @@ class SceneConverter:
 
     def _should_export_object_instance(self, object_instance):
         if self.use_selection:
-            #skip if it's not selected or if it's an instance and the parent object is not selected
+            # Skip if it's not selected or if it's an instance and the parent object is not selected
             if not object_instance.is_instance and not object_instance.object.original.select_get():
                 return False
             if (object_instance.is_instance and object_instance.object.parent
@@ -124,7 +124,7 @@ class SceneConverter:
 
             evaluated_obj = object_instance.object
             object_type = evaluated_obj.type
-            #type: enum in [‘MESH’, ‘CURVE’, ‘SURFACE’, ‘META’, ‘FONT’, ‘ARMATURE’, ‘LATTICE’, ‘EMPTY’, ‘GPENCIL’, ‘CAMERA’, ‘LIGHT’, ‘SPEAKER’, ‘LIGHT_PROBE’], default ‘EMPTY’, (readonly)
+            # Type: enum in [‘MESH’, ‘CURVE’, ‘SURFACE’, ‘META’, ‘FONT’, ‘ARMATURE’, ‘LATTICE’, ‘EMPTY’, ‘GPENCIL’, ‘CAMERA’, ‘LIGHT’, ‘SPEAKER’, ‘LIGHT_PROBE’], default ‘EMPTY’, (readonly)
             if object_type in {'MESH', 'FONT', 'SURFACE', 'META'}:
                 geometry.export_object(object_instance, self.export_ctx, evaluated_obj.name in particles)
             elif object_type == 'CAMERA':

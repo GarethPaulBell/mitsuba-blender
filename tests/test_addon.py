@@ -26,10 +26,6 @@ def _export_test_scene(tmp_path, filename):
 
 
 def test_exporter_linked_duplicates_use_instances(tmp_path):
-    import importlib
-    io_module = importlib.import_module("mitsuba-blender.io")
-    assert io_module
-
     bpy.ops.mesh.primitive_cube_add(location=(0.0, 0.0, 0.0))
     source = bpy.context.object
     source.name = "SharedCubeSource"
