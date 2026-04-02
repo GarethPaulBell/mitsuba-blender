@@ -43,6 +43,44 @@ class SceneConverter:
         # Give the path to the export context, for saving meshes and files
         self.export_ctx.directory, _ = os.path.split(name)
 
+    def _should_export_object_instance(self, object_instance):
+        if self.use_selection:
+            #skip if it's not selected or if it's an instance and the parent object is not selected
+            if not object_instance.is_instance and not object_instance.object.original.select_get():
+                return False
+            if (object_instance.is_instance and object_instance.object.parent
+                and not object_instance.object.parent.original.select_get()):
+                return False
+
+        evaluated_obj = object_instance.object
+        if evaluated_obj.hide_render or (object_instance.is_instance
+            and evaluated_obj.parent and evaluated_obj.parent.original.hide_render):
+            self.export_ctx.log("Object: {} is hidden for render. Ignoring it.".format(evaluated_obj.name), 'INFO')
+            return False
+
+        return True
+
+    def _cache_mesh_use_count(self, object_instances):
+        mesh_use_count = {}
+
+        for object_instance in object_instances:
+            if object_instance.is_instance:
+                continue
+
+            evaluated_obj = object_instance.object
+            if evaluated_obj.type != 'MESH':
+                continue
+
+            source_object = evaluated_obj.original if evaluated_obj.original else evaluated_obj
+            source_mesh = getattr(source_object, 'data', None)
+            if source_mesh is None:
+                continue
+
+            mesh_key = source_mesh.as_pointer()
+            mesh_use_count[mesh_key] = mesh_use_count.get(mesh_key, 0) + 1
+
+        self.export_ctx.mesh_use_count = mesh_use_count
+
     def scene_to_dict(self, depsgraph, window_manager):
         # Switch to object mode before exporting stuff, so everything is defined properly
         if bpy.ops.object.mode_set.poll():
@@ -72,27 +110,21 @@ class SceneConverter:
                 for obj in particle_sys.instance_collection.objects:
                     particles.append(obj.name)
 
+        exportable_instances = [
+            object_instance for object_instance in depsgraph.object_instances
+            if self._should_export_object_instance(object_instance)
+        ]
+        self._cache_mesh_use_count(exportable_instances)
+
         progress_counter = 0
         # Main export loop
-        for object_instance in depsgraph.object_instances:
+        for object_instance in exportable_instances:
             window_manager.progress_update(progress_counter)
             progress_counter += 1
-
-            if self.use_selection:
-                #skip if it's not selected or if it's an instance and the parent object is not selected
-                if not object_instance.is_instance and not object_instance.object.original.select_get():
-                    continue
-                if (object_instance.is_instance and object_instance.object.parent
-                    and not object_instance.object.parent.original.select_get()):
-                    continue
 
             evaluated_obj = object_instance.object
             object_type = evaluated_obj.type
             #type: enum in [‘MESH’, ‘CURVE’, ‘SURFACE’, ‘META’, ‘FONT’, ‘ARMATURE’, ‘LATTICE’, ‘EMPTY’, ‘GPENCIL’, ‘CAMERA’, ‘LIGHT’, ‘SPEAKER’, ‘LIGHT_PROBE’], default ‘EMPTY’, (readonly)
-            if evaluated_obj.hide_render or (object_instance.is_instance
-                and evaluated_obj.parent and evaluated_obj.parent.original.hide_render):
-                self.export_ctx.log("Object: {} is hidden for render. Ignoring it.".format(evaluated_obj.name), 'INFO')
-                continue#ignore it since we don't want it rendered (TODO: hide_viewport)
             if object_type in {'MESH', 'FONT', 'SURFACE', 'META'}:
                 geometry.export_object(object_instance, self.export_ctx, evaluated_obj.name in particles)
             elif object_type == 'CAMERA':

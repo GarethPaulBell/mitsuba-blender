@@ -17,6 +17,11 @@ def is_simple_plane(b_mesh):
     )
 
 
+def get_source_mesh(b_object):
+    source_object = b_object.original if b_object.original else b_object
+    return getattr(source_object, 'data', None)
+
+
 def convert_mesh(export_ctx, b_mesh, matrix_world, name, mat_nr):
     '''
     This method creates a mitsuba mesh from a blender mesh and returns it.
@@ -117,10 +122,24 @@ def export_object(deg_instance, export_ctx, is_particle):
     b_object = deg_instance.object
     # Remove spurious characters such as slashes
     name_clean = bpy.path.clean_name(b_object.name_full)
-    object_id = f"mesh-{name_clean}"
+    export_name = name_clean
+
+    is_shared_mesh = False
+    if b_object.type == 'MESH':
+        source_mesh = get_source_mesh(b_object)
+        if source_mesh is not None:
+            export_name = bpy.path.clean_name(source_mesh.name)
+            is_shared_mesh = export_ctx.mesh_use_count.get(source_mesh.as_pointer(), 0) > 1
+
+    if not is_shared_mesh:
+        export_name = name_clean
+
+    object_id = f"mesh-{export_name}"
 
     is_instance_emitter = b_object.parent is not None and b_object.parent.is_instancer
     is_instance = deg_instance.is_instance
+    needs_shapegroup = is_instance or is_instance_emitter or is_particle or is_shared_mesh
+    needs_instance = is_instance or is_particle or is_shared_mesh
 
     # Only write to file objects that have never been exported before
     if export_ctx.data_get(object_id) is None:
@@ -129,10 +148,10 @@ def export_object(deg_instance, export_ctx, is_particle):
 
             if is_simple_plane(b_mesh):
                 export_ctx.log(f"Exporting '{b_object.name}' as native Mitsuba rectangle.", 'INFO')
-                params = {
-                    'type': 'rectangle',
-                    'to_world': export_ctx.transform_matrix(b_object.matrix_world)
-                }
+                params = {'type': 'rectangle'}
+
+                if not needs_shapegroup:
+                    params['to_world'] = export_ctx.transform_matrix(b_object.matrix_world)
 
                 if b_mesh.materials:
                     mat = b_mesh.materials[0]
@@ -147,116 +166,121 @@ def export_object(deg_instance, export_ctx, is_particle):
                         else:
                             params['bsdf'] = {'type': 'ref', 'id': mat_id}
 
-                export_ctx.data_add(params, name=object_id)
-                return
+                if needs_shapegroup:
+                    export_ctx.data_add({
+                        'type': 'shapegroup',
+                        export_name: params
+                    }, name=object_id)
+                else:
+                    export_ctx.data_add(params, name=object_id)
         else: # Metaballs, text, surfaces
             b_mesh = b_object.to_mesh()
 
-        # Convert the mesh into one mitsuba mesh per different material
-        mat_count = len(b_mesh.materials)
-        converted_parts = []
-        if is_instance or is_instance_emitter:
-            transform = None
-        else:
-            transform = b_object.matrix_world
+        if not (b_object.type == 'MESH' and is_simple_plane(b_mesh)):
+            # Convert the mesh into one mitsuba mesh per different material
+            mat_count = len(b_mesh.materials)
+            converted_parts = []
+            if needs_shapegroup:
+                transform = None
+            else:
+                transform = b_object.matrix_world
 
 
-        if mat_count == 0: # No assigned material
-            mts_mesh = convert_mesh(export_ctx, b_mesh, transform, name_clean, 0)
-            if mts_mesh is not None and mts_mesh.face_count() > 0:
-                converted_parts.append((name_clean, -1, mts_mesh))
-        else:
-            refs_per_mat = {}
-            for mat_nr in range(mat_count):
-                mat = b_mesh.materials[mat_nr]
-                if not mat:
-                    continue
-
-                # Ensures that the exported mesh parts have unique names,
-                # even if multiple material slots refer to the same material.
-                n_mat_refs = refs_per_mat.get(mat.name, 0)
-                name = f'{name_clean}-{mat.name}'
-
-                if n_mat_refs >= 1:
-                    name += f'-{n_mat_refs:03d}'
-
-                mts_mesh = convert_mesh(export_ctx,
-                                        b_mesh,
-                                        transform,
-                                        name,
-                                        mat_nr)
+            if mat_count == 0: # No assigned material
+                mts_mesh = convert_mesh(export_ctx, b_mesh, transform, export_name, 0)
                 if mts_mesh is not None and mts_mesh.face_count() > 0:
-                    converted_parts.append((name, mat_nr, mts_mesh))
-                    refs_per_mat[mat.name] = n_mat_refs + 1
-
-                    if n_mat_refs == 0:
-                        # Only export this material once
-                        export_material(export_ctx, mat)
-
-        if b_object.type != 'MESH':
-            b_object.to_mesh_clear()
-
-        # Use a ShapeGroup for instances and split meshes
-        use_shapegroup = is_instance or is_instance_emitter or is_particle
-        # TODO: Check if shapegroups for split meshes is worth it
-        if use_shapegroup:
-            group = {
-                'type': 'shapegroup'
-            }
-
-        for (name, mat_nr, mts_mesh) in converted_parts:
-            name = name_clean if len(converted_parts) == 1 else name
-            mesh_id = f"mesh-{name}"
-
-            # Save as binary ply
-            mesh_folder = os.path.join(export_ctx.directory, export_ctx.subfolders['shape'])
-            if not os.path.isdir(mesh_folder):
-                os.makedirs(mesh_folder)
-            filepath = os.path.join(mesh_folder,  f"{name}.ply")
-            mts_mesh.write_ply(filepath)
-
-            # Build dictionary entry
-            params = {
-                'type': 'ply',
-                'filename': f"{export_ctx.subfolders['shape']}/{name}.ply"
-            }
-
-            # Add flat shading flag if needed
-            if not mts_mesh.has_vertex_normals():
-                params["face_normals"] = True
-
-            # Add material info
-            if mat_nr == -1:
-                if not export_ctx.data_get('default-bsdf'): # We only need to add it once
-                    default_bsdf = {
-                        'type': 'twosided',
-                        'id': 'default-bsdf',
-                        'bsdf': {'type':'diffuse'}
-                    }
-                    export_ctx.data_add(default_bsdf)
-                params['bsdf'] = {'type':'ref', 'id':'default-bsdf'}
+                    converted_parts.append((export_name, -1, mts_mesh))
             else:
-                mat_id = f"mat-{b_object.data.materials[mat_nr].name}"
-                if export_ctx.exported_mats.has_mat(mat_id): # Add one emitter *and* one bsdf
-                    mixed_mat = export_ctx.exported_mats.mats[mat_id]
-                    params['bsdf'] = {'type':'ref', 'id':mixed_mat['bsdf']}
-                    params['emitter'] = mixed_mat['emitter']
+                refs_per_mat = {}
+                for mat_nr in range(mat_count):
+                    mat = b_mesh.materials[mat_nr]
+                    if not mat:
+                        continue
+
+                    # Ensures that the exported mesh parts have unique names,
+                    # even if multiple material slots refer to the same material.
+                    n_mat_refs = refs_per_mat.get(mat.name, 0)
+                    name = f'{export_name}-{mat.name}'
+
+                    if n_mat_refs >= 1:
+                        name += f'-{n_mat_refs:03d}'
+
+                    mts_mesh = convert_mesh(export_ctx,
+                                            b_mesh,
+                                            transform,
+                                            name,
+                                            mat_nr)
+                    if mts_mesh is not None and mts_mesh.face_count() > 0:
+                        converted_parts.append((name, mat_nr, mts_mesh))
+                        refs_per_mat[mat.name] = n_mat_refs + 1
+
+                        if n_mat_refs == 0:
+                            # Only export this material once
+                            export_material(export_ctx, mat)
+
+            if b_object.type != 'MESH':
+                b_object.to_mesh_clear()
+
+            # Use a ShapeGroup for instances and split meshes
+            # TODO: Check if shapegroups for split meshes is worth it
+            if needs_shapegroup:
+                group = {
+                    'type': 'shapegroup'
+                }
+
+            for (name, mat_nr, mts_mesh) in converted_parts:
+                name = export_name if len(converted_parts) == 1 else name
+                mesh_id = f"mesh-{name}"
+
+                # Save as binary ply
+                mesh_folder = os.path.join(export_ctx.directory, export_ctx.subfolders['shape'])
+                if not os.path.isdir(mesh_folder):
+                    os.makedirs(mesh_folder)
+                filepath = os.path.join(mesh_folder,  f"{name}.ply")
+                mts_mesh.write_ply(filepath)
+
+                # Build dictionary entry
+                params = {
+                    'type': 'ply',
+                    'filename': f"{export_ctx.subfolders['shape']}/{name}.ply"
+                }
+
+                # Add flat shading flag if needed
+                if not mts_mesh.has_vertex_normals():
+                    params["face_normals"] = True
+
+                # Add material info
+                if mat_nr == -1:
+                    if not export_ctx.data_get('default-bsdf'): # We only need to add it once
+                        default_bsdf = {
+                            'type': 'twosided',
+                            'id': 'default-bsdf',
+                            'bsdf': {'type':'diffuse'}
+                        }
+                        export_ctx.data_add(default_bsdf)
+                    params['bsdf'] = {'type':'ref', 'id':'default-bsdf'}
                 else:
-                    params['bsdf'] = {'type':'ref', 'id':mat_id}
+                    mat_id = f"mat-{b_object.data.materials[mat_nr].name}"
+                    if export_ctx.exported_mats.has_mat(mat_id): # Add one emitter *and* one bsdf
+                        mixed_mat = export_ctx.exported_mats.mats[mat_id]
+                        params['bsdf'] = {'type':'ref', 'id':mixed_mat['bsdf']}
+                        params['emitter'] = mixed_mat['emitter']
+                    else:
+                        params['bsdf'] = {'type':'ref', 'id':mat_id}
 
-            # Add dict to the scene dict
-            if use_shapegroup:
-                group[name] = params
-            else:
-                if export_ctx.export_ids:
-                    export_ctx.data_add(params, name=mesh_id)
+                # Add dict to the scene dict
+                if needs_shapegroup:
+                    group[name] = params
                 else:
-                    export_ctx.data_add(params)
+                    if export_ctx.export_ids:
+                        export_ctx.data_add(params, name=mesh_id)
+                    else:
+                        export_ctx.data_add(params)
 
-        if use_shapegroup:
-            export_ctx.data_add(group, name=object_id)
+            if needs_shapegroup:
+                export_ctx.data_add(group, name=object_id)
 
-    if is_instance or is_particle:
+    if needs_instance and export_ctx.data_get(object_id) is not None:
         params = {
             'type': 'instance',
             'shape': {

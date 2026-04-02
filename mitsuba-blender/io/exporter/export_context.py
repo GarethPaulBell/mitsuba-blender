@@ -73,6 +73,7 @@ class ExportContext:
         self.directory = ''
         self.axis_mat = Matrix() # Coordinate shift
         self.deg = None # Dependency graph
+        self.mesh_use_count = {}
         self.subfolders = {
             'texture': 'textures',
             'emitter': 'textures',
